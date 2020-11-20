@@ -31,11 +31,7 @@ class JAMF {
         $base64 = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
         $decoded = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($base64))
         $p = $decoded.Split('|')[1..$decoded.Split('|').Count] -join '|'
-        $creds = New-Object System.Management.Automation.PSCredential($decoded.Split('|')[0], (ConvertTo-SecureString $p -AsPlainText -Force))
-        
-        # Remove anyt vars that might expose a password.
-        @('bstr', 'base64', 'decoded', 'p') | Foreach-Object { Remove-Variable $_ -Force }
-        
+        $creds = New-Object System.Management.Automation.PSCredential($decoded.Split('|')[0], (ConvertTo-SecureString $p -AsPlainText -Force))        
         return $creds
     }
 
