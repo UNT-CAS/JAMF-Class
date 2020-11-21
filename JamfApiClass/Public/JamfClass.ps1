@@ -8,7 +8,7 @@ class JAMF {
         $this.url = $url
         $this.Credential = $this.getCredString($credstr)
     }
-    
+
     JAMF ([string] $url, [pscredential] $creds) {
         $this.url = $url
         $this.Credential = $creds
@@ -18,7 +18,7 @@ class JAMF {
     .SYNOPSIS    
         Expects secure string of utf8 base64 of plaintext credentials in this format:
             user|pass
-    
+
     .EXAMPLE
         $userpass = 'user|P@$$w0rd!'
         $bytes = [System.Text.Encoding]::Utf8.GetBytes($userpass)
@@ -31,7 +31,7 @@ class JAMF {
         $base64 = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
         $decoded = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($base64))
         $p = $decoded.Split('|')[1..$decoded.Split('|').Count] -join '|'
-        $creds = New-Object System.Management.Automation.PSCredential($decoded.Split('|')[0], (ConvertTo-SecureString $p -AsPlainText -Force))        
+        $creds = New-Object System.Management.Automation.PSCredential($decoded.Split('|')[0], (ConvertTo-SecureString $p -AsPlainText -Force))
         return $creds
     }
 
@@ -87,7 +87,15 @@ class JAMF {
 
         switch ($restMethod.Auth) {
             'basic' {
-                $restMethod.Set_Item('Authentication', 'Basic')
+                $base64AuthInfo = [Convert]::ToBase64String(
+                    [Text.Encoding]::ASCII.GetBytes(
+                        ("{0}:{1}" -f $this.Credential.UserName, $this.Credential.GetNetworkCredential().Password)
+                    )
+                )
+
+                $restMethod.Set_Item('Headers', @{
+                    Authorization = "Basic {0}" -f $base64AuthInfo
+                })
                 $restMethod.Set_Item('Credential', $this.Credential)
                 break
             }
@@ -120,16 +128,66 @@ class JAMF {
     }
 
     [psobject] getComputers() {
-        $restMethod = $this.getRestMethod('uapi/preview/computers')
-        $call = Invoke-RestMethod @restMethod
-        Write-Verbose ('[JAMF getComputers] Computers Count: {0}' -f $call.totalCount)
-        return $call.results
+        return $this.getComputers($false)
     }
-    
+
+    [psobject] getComputers([bool] $oldAPI) {
+        if ($oldAPI) {
+            $restMethod = $this.getRestMethod(@{
+                Uri = 'JSSResource/computers'
+                Method = 'GET'
+                Auth = 'basic'
+            })
+            $results = (Invoke-RestMethod @restMethod).computers
+
+            Write-Verbose ('[JAMF getComputers] Total: {0}' -f $results.size)
+            Write-Verbose ('[JAMF getComputers] Results: {0}' -f ($results.computer.Count))
+
+            [Collections.ArrayList] $computers = @()
+            foreach ($computer in $results.computer) {
+                $restMethod = $this.getRestMethod(@{
+                    Uri = 'JSSResource/computers/id/{0}' -f $computer.id
+                    Method = 'GET'
+                    Auth = 'basic'
+                })
+                $results = Invoke-RestMethod @restMethod
+                $computers.Add($results.computer) | Out-Null
+            }
+
+            return $computers
+        } else {
+            $page = 0
+            $computersUrl = 'uapi/preview/computers?page={0}'
+            $call = @{ totalCount = 1 }
+            $results = @()
+
+            while ($results.Count -lt $call.totalCount) {
+                $restMethod = $this.getRestMethod(($computersUrl -f $page))
+                $call = Invoke-RestMethod @restMethod
+                $results = $results + $call.results
+                $page++
+            }
+
+            Write-Verbose ('[JAMF getComputers] Total: {0}' -f $call.totalCount)
+            Write-Verbose ('[JAMF getComputers] Results: {0}' -f $results.Count)
+
+            return $results
+        }
+    }
+
     [psobject] getManagedComputers() {
-        $computers = $this.getComputers()
-        $computers = $computers | Where-Object { $_.isManaged }
-        Write-Verbose ('[JAMF getComputers] Managed Computers Count: {0}' -f $computers.Count)
+        return $this.getManagedComputers($false)
+    }
+
+    [psobject] getManagedComputers([bool] $oldAPI) {
+        $computers = $this.getComputers($oldAPI)
+        Write-Verbose ('[JAMF getManagedComputers] Computers: {0}' -f $computers.Count)
+
+        if (-not $oldAPI) {
+            $computers = $computers | Where-Object { $_.isManaged }
+            Write-Verbose ('[JAMF getManagedComputers] Managed: {0}' -f $computers.Count)
+        }
+
         return $computers
     }
 
@@ -138,7 +196,7 @@ class JAMF {
         $call = Invoke-RestMethod @restMethod
         return $call
     }
-    
+
     [psobject] getComputerExtensionAttribute([int] $id, [string] $attribute) {
         return $this.getComputerExtensionAttributes($id, @($attribute))
     }
